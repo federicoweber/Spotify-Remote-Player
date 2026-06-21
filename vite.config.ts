@@ -1,18 +1,18 @@
 import { defineConfig } from 'vite'
-import basicSsl from '@vitejs/plugin-basic-ssl'
 
-// Serve over HTTPS on localhost:5000 so it matches the Spotify redirect URI
-// (Spotify allows https://localhost but not plain http://localhost).
+// Serve over plain HTTP on the loopback IP literal 127.0.0.1.
+// Spotify rejects "localhost" as a redirect host ("Insecure"), but allows
+// loopback IPs (http://127.0.0.1:PORT) without HTTPS. 127.0.0.1 is also a
+// browser "secure context", so window.crypto.subtle (used for PKCE) works.
 export default defineConfig({
-  plugins: [basicSsl()],
   server: {
-    host: 'localhost',
-    port: 5000,
+    host: '127.0.0.1',
+    port: 5173,
     strictPort: true,
   },
   preview: {
-    host: 'localhost',
-    port: 5000,
+    host: '127.0.0.1',
+    port: 5173,
     strictPort: true,
   },
 })

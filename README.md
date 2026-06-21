@@ -28,8 +28,9 @@ this app remote-controls one of those apps over **Spotify Connect**.
 ### 1. Create a Spotify app
 
 1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and **Create app**.
-2. Add this **Redirect URI** exactly: `https://localhost:5000`
-   (Spotify allows `https://localhost`, but not plain `http://localhost`.)
+2. Add this **Redirect URI** exactly: `http://127.0.0.1:5173`
+   (Spotify rejects `localhost` as "Insecure" — you must use the loopback IP
+   literal `127.0.0.1`. Plain HTTP is allowed for loopback addresses.)
 3. Copy the app's **Client ID**.
 
 ### 2. Configure
@@ -43,7 +44,7 @@ cp .env.example .env
 
 (You can also paste the Client ID into the app's sign-in screen instead.)
 
-The redirect URI defaults to `https://localhost:5000` to match the dashboard
+The redirect URI defaults to `http://127.0.0.1:5173` to match the dashboard
 entry above. If you registered a different URI, set `VITE_SPOTIFY_REDIRECT_URI`
 to match it **exactly**.
 
@@ -54,17 +55,15 @@ npm install
 npm run dev
 ```
 
-Open **https://localhost:5000**.
+Open **http://127.0.0.1:5173**.
 
-> The dev server uses a self-signed certificate (`@vitejs/plugin-basic-ssl`), so
-> your browser will warn the first time — accept it to proceed. To avoid the
-> warning entirely, generate a locally-trusted cert with
-> [`mkcert`](https://github.com/FiloSottile/mkcert) and point Vite's `server.https`
-> at it.
+> No HTTPS or certificate is needed: Spotify permits plain HTTP for loopback
+> addresses, and browsers treat `http://127.0.0.1` as a secure context (so the
+> PKCE crypto works).
 
 ## Using it
 
-1. **Connect Spotify** and approve the requested scopes.
+1. Open **http://127.0.0.1:5173** and **Connect Spotify**, then approve the requested scopes.
 2. Make sure a device is available (open the Spotify desktop app). Pick it from
    **Playback device** — hit **↻ Devices** if it isn't listed yet.
 3. Set the **gap between songs** in seconds (default 5).
@@ -85,9 +84,9 @@ the Spotify app — this tool can't set it over the API.
 
 | Command           | Description                                  |
 | ----------------- | -------------------------------------------- |
-| `npm run dev`     | Start the HTTPS dev server on `:5000`        |
+| `npm run dev`     | Start the dev server on `http://127.0.0.1:5173` |
 | `npm run build`   | Type-check (`tsc`) and build to `dist/`      |
-| `npm run preview` | Serve the production build on `:5000`        |
+| `npm run preview` | Serve the production build on `:5173`        |
 
 ## Tech
 
@@ -113,20 +112,19 @@ src/
 
 ## Troubleshooting
 
-**Port 5000 / "AirPlay Receiver" on macOS.** macOS's AirPlay Receiver also
-listens on port 5000 (IPv4). Vite serves on IPv6 `localhost` (`[::1]:5000`) and
-usually wins, but if the page won't load or you see odd responses, free the port:
-**System Settings → General → AirDrop & Handoff → turn off AirPlay Receiver**,
-then restart `npm run dev`. (Alternatively, pick another port in
-`vite.config.ts` + the Spotify redirect URI + `.env`.)
+**`redirect_uri: Insecure` / `INVALID_CLIENT: Insecure redirect URI`.** Spotify
+no longer accepts `localhost` as a redirect host. Use the loopback IP literal
+(`http://127.0.0.1:5173`) in both the dashboard and `VITE_SPOTIFY_REDIRECT_URI`.
 
-**`INVALID_CLIENT: Invalid redirect URI`.** The redirect URI sent by the app
-must match the dashboard entry character-for-character. Confirm
+**`INVALID_CLIENT: Invalid redirect URI`.** The redirect URI sent by the app must
+match the dashboard entry character-for-character. Confirm
 `VITE_SPOTIFY_REDIRECT_URI` (and the field on the sign-in screen) equals what's
 registered, including scheme, port, and any trailing path.
 
-**Certificate warning.** Expected with the self-signed dev cert — accept it once,
-or use `mkcert` for a trusted cert.
+**Changing the port.** If you change the port, update it in three places so they
+stay in sync: `vite.config.ts`, the Spotify dashboard redirect URI, and
+`VITE_SPOTIFY_REDIRECT_URI` in `.env`. (Avoid port 5000 on macOS — the AirPlay
+Receiver service uses it.)
 
 ## Limitations / notes
 
