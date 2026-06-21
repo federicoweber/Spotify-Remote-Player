@@ -189,6 +189,22 @@ export function isLoggedIn(): boolean {
   return getStoredTokens() !== null
 }
 
+/** Scopes the current access token was actually granted. */
+export function getGrantedScopes(): string[] {
+  const scope = getStoredTokens()?.scope
+  return scope ? scope.split(' ') : []
+}
+
+export function hasScope(scope: string): boolean {
+  return getGrantedScopes().includes(scope)
+}
+
+/** True if the stored token is missing any scope this app now requires. */
+export function needsReauth(): boolean {
+  const granted = new Set(getGrantedScopes())
+  return SCOPES.split(' ').some((s) => !granted.has(s))
+}
+
 // ---------------------------------------------------------------------------
 // Token storage + refresh
 // ---------------------------------------------------------------------------

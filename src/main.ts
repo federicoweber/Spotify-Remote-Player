@@ -33,7 +33,13 @@ let user: SpotifyUser | null = null
 let albums: SavedAlbum[] = []
 let playlists: SimplifiedPlaylist[] = []
 let playlistsLoaded = false
+let playlistScopeMissing = false
 let libraryMode: 'albums' | 'playlists' = 'albums'
+
+const PLAYLIST_SCOPE = 'playlist-read-private'
+function canReadPlaylists(): boolean {
+  return auth.hasScope(PLAYLIST_SCOPE) && !playlistScopeMissing
+}
 let devices: Device[] = []
 let selectedDeviceId: string | null = null
 let intervalSec = 5
@@ -322,6 +328,8 @@ function updateLibrary(): void {
       )
       if (!filtered.length) return void grid.append(emptyNote())
       for (const saved of filtered) grid.append(albumCard(saved))
+    } else if (!canReadPlaylists()) {
+      grid.append(playlistGrantPrompt())
     } else {
       const filtered = playlists.filter((p) =>
         matches(p.name, p.owner.display_name ?? ''),
@@ -342,6 +350,24 @@ function emptyNote(): HTMLElement {
   return el('p', { class: 'muted', text: 'Nothing matches.' })
 }
 
+function playlistGrantPrompt(): HTMLElement {
+  return el('div', { class: 'grant' }, [
+    el('p', { class: 'muted', text:
+      'Reading your playlists needs an extra Spotify permission that your current sign-in didn’t include.' }),
+    el('button', {
+      class: 'btn btn-primary',
+      text: 'Grant playlist access',
+      onclick: async () => {
+        try {
+          await auth.login()
+        } catch (e) {
+          alert(messageOf(e))
+        }
+      },
+    }),
+  ])
+}
+
 function libraryTab(mode: 'albums' | 'playlists', label: string): HTMLElement {
   return el('button', {
     class: `tab${libraryMode === mode ? ' tab-active' : ''}`,
@@ -350,7 +376,7 @@ function libraryTab(mode: 'albums' | 'playlists', label: string): HTMLElement {
       if (libraryMode === mode) return
       libraryMode = mode
       filterText = ''
-      if (mode === 'playlists' && !playlistsLoaded) {
+      if (mode === 'playlists' && !playlistsLoaded && canReadPlaylists()) {
         await loadPlaylists()
       } else {
         updateLibrary()
@@ -708,6 +734,12 @@ async function loadPlaylists(): Promise<void> {
     )
     playlistsLoaded = true
   } catch (e) {
+    // Token is missing the playlist scope — show the "grant access" prompt.
+    if (e instanceof SpotifyApiError && e.status === 403) {
+      playlistScopeMissing = true
+      updateLibrary()
+      return
+    }
     clear(libraryEl)
     libraryEl.append(el('div', { class: 'notice', text: messageOf(e) }))
     return
