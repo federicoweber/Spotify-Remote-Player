@@ -12,6 +12,13 @@ export interface SimpleArtist {
   name: string
 }
 
+/** Lightweight album reference carried on full track objects (e.g. playlist items). */
+export interface AlbumRef {
+  id: string
+  name: string
+  images: Image[]
+}
+
 export interface Track {
   id: string
   uri: string
@@ -21,6 +28,8 @@ export interface Track {
   disc_number: number
   artists: SimpleArtist[]
   is_playable?: boolean
+  /** Present on full tracks (playlist items); absent on album's simplified tracks. */
+  album?: AlbumRef
 }
 
 export interface Paging<T> {
@@ -46,6 +55,30 @@ export interface Album {
 export interface SavedAlbum {
   added_at: string
   album: Album
+}
+
+export interface SimplifiedPlaylist {
+  id: string
+  uri: string
+  name: string
+  description: string | null
+  images: Image[]
+  owner: { id: string; display_name: string | null }
+  tracks: { href: string; total: number }
+}
+
+/** An entry in a playlist; `track` is null for removed items and may be an episode. */
+export interface PlaylistTrackItem {
+  track: Track | null
+  is_local?: boolean
+}
+
+/** What the sequencer is playing — an album or a playlist, generalized. */
+export interface PlaybackSource {
+  kind: 'album' | 'playlist'
+  id: string
+  name: string
+  images: Image[]
 }
 
 export interface SpotifyUser {

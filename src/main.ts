@@ -4,40 +4,66 @@ import * as api from './spotify/api'
 import { SpotifyApiError } from './spotify/api'
 import { AlbumSequencer } from './player/sequencer'
 import type { SequencerSnapshot } from './player/sequencer'
+import { planDiscs } from './player/discs'
 import { el, clear } from './ui/dom'
-import { albumImage, artistsText, msToClock, releaseYear } from './ui/format'
-import type { Album, Device, SavedAlbum, SpotifyUser, Track } from './spotify/types'
+import {
+  albumImage,
+  artistsText,
+  msToClock,
+  releaseYear,
+  totalMinutesLabel,
+} from './ui/format'
+import type {
+  Album,
+  Device,
+  PlaybackSource,
+  SavedAlbum,
+  SimplifiedPlaylist,
+  SpotifyUser,
+  Track,
+} from './spotify/types'
 
 const root = document.getElementById('app')!
 const sequencer = new AlbumSequencer()
 
+const DISC_OPTIONS = [0, 60, 74, 80] // 0 = off; 60/74/80 = MiniDisc lengths
+
 // ---- app state ------------------------------------------------------------
 let user: SpotifyUser | null = null
 let albums: SavedAlbum[] = []
+let playlists: SimplifiedPlaylist[] = []
+let playlistsLoaded = false
+let libraryMode: 'albums' | 'playlists' = 'albums'
 let devices: Device[] = []
 let selectedDeviceId: string | null = null
 let intervalSec = 5
+let discCapacityMin = 74
 let filterText = ''
-let detail: { album: Album; tracks: Track[] } | null = null
+let detail: {
+  source: PlaybackSource
+  tracks: Track[]
+  totalCount: number
+  subtitle: string
+  loading: boolean
+  error?: string
+} | null = null
 
 // ---- stable section containers (built once in renderShell) ----------------
 let headerEl: HTMLElement
 let controlsEl: HTMLElement
-let albumsEl: HTMLElement
+let libraryEl: HTMLElement
 let nowPlayingEl: HTMLElement
 let modalEl: HTMLElement
 
 void bootstrap()
 
 async function bootstrap(): Promise<void> {
-  let justSignedIn = false
   try {
-    justSignedIn = await auth.handleRedirectCallback()
+    await auth.handleRedirectCallback()
   } catch (e) {
     renderLogin(messageOf(e))
     return
   }
-  void justSignedIn
 
   if (!auth.isLoggedIn()) {
     renderLogin()
@@ -55,7 +81,7 @@ async function bootstrap(): Promise<void> {
       renderLogin('Your session expired. Please sign in again.')
       return
     }
-    updateControlsNotice(messageOf(e))
+    updateControls(messageOf(e))
   }
   updateHeader()
   updateControls()
@@ -78,21 +104,11 @@ function renderLogin(error?: string): void {
     autocapitalize: 'off',
   }) as HTMLInputElement
 
-  const redirectInput = el('input', {
-    class: 'field',
-    type: 'text',
-    placeholder: 'Redirect URI',
-    value: auth.getRedirectUri(),
-    spellcheck: 'false',
-    autocapitalize: 'off',
-  }) as HTMLInputElement
-
   const connectBtn = el('button', {
     class: 'btn btn-primary btn-lg',
     text: 'Connect Spotify',
     onclick: async () => {
       auth.setClientId(clientIdInput.value)
-      auth.setRedirectUri(redirectInput.value)
       if (!clientIdInput.value.trim()) {
         showLoginError('Enter your Spotify app Client ID first.')
         return
@@ -122,13 +138,12 @@ function renderLogin(error?: string): void {
     ]),
     el('p', {
       class: 'muted',
-      text: 'Browse your saved albums and play them on a Spotify Connect device with a custom gap between every track.',
+      text: 'Browse your saved albums and playlists, then dub them to a Connect device with a custom gap between tracks and MiniDisc-length disc splitting.',
     }),
     errorBox,
     el('label', { class: 'field-label', text: 'Client ID' }),
     clientIdInput,
-    el('label', { class: 'field-label', text: 'Redirect URI (must match your Spotify app exactly)' }),
-    redirectInput,
+    el('p', { class: 'muted small', text: `Redirect URI: ${auth.getRedirectUri()}` }),
     connectBtn,
     el('div', { class: 'login-help' }, [
       el('p', { class: 'muted small', html:
@@ -149,7 +164,7 @@ function renderShell(): void {
   clear(root)
   headerEl = el('header', { class: 'topbar' })
   controlsEl = el('section', { class: 'controls' })
-  albumsEl = el('section', { class: 'albums' })
+  libraryEl = el('section', { class: 'albums' })
   nowPlayingEl = el('footer', { class: 'nowplaying', hidden: true })
   modalEl = el('div', { class: 'modal-backdrop', hidden: true })
 
@@ -159,7 +174,7 @@ function renderShell(): void {
 
   root.append(
     headerEl,
-    el('main', { class: 'content' }, [controlsEl, albumsEl]),
+    el('main', { class: 'content' }, [controlsEl, libraryEl]),
     nowPlayingEl,
     modalEl,
   )
@@ -174,9 +189,7 @@ function updateHeader(): void {
       el('span', { text: 'Album Sequencer' }),
     ]),
     el('div', { class: 'user' }, [
-      avatarUrl
-        ? el('img', { class: 'avatar', src: avatarUrl, alt: '' })
-        : null,
+      avatarUrl ? el('img', { class: 'avatar', src: avatarUrl, alt: '' }) : null,
       el('span', { class: 'user-name', text: user?.display_name ?? '' }),
       el('button', {
         class: 'btn btn-ghost',
@@ -201,9 +214,7 @@ function updateControls(notice?: string): void {
   } else {
     for (const d of devices) {
       const label = `${d.name} · ${d.type}${d.is_active ? ' (active)' : ''}`
-      deviceSelect.append(
-        el('option', { value: d.id ?? '', text: label }) as HTMLOptionElement,
-      )
+      deviceSelect.append(el('option', { value: d.id ?? '', text: label }))
     }
     deviceSelect.value = selectedDeviceId ?? ''
     deviceSelect.disabled = false
@@ -220,7 +231,7 @@ function updateControls(notice?: string): void {
     onclick: () => void loadDevices(),
   })
 
-  // Interval
+  // Inter-track gap
   const intervalInput = el('input', {
     class: 'field interval-input',
     type: 'number',
@@ -235,14 +246,32 @@ function updateControls(notice?: string): void {
     sequencer.setIntervalSeconds(intervalSec)
   })
 
+  // Disc capacity (MiniDisc length)
+  const discSelect = el('select', { class: 'field select' }) as HTMLSelectElement
+  for (const opt of DISC_OPTIONS) {
+    discSelect.append(
+      el('option', { value: String(opt), text: opt === 0 ? 'Off' : `${opt} min` }),
+    )
+  }
+  discSelect.value = String(discCapacityMin)
+  discSelect.addEventListener('change', () => {
+    discCapacityMin = Number(discSelect.value)
+    sequencer.setDiscCapacityMinutes(discCapacityMin)
+    if (detail) renderDetail()
+  })
+
   controlsEl.append(
     el('div', { class: 'control-group' }, [
       el('label', { class: 'field-label', text: 'Playback device' }),
       el('div', { class: 'control-row' }, [deviceSelect, refreshBtn]),
     ]),
-    el('div', { class: 'control-group' }, [
+    el('div', { class: 'control-group control-narrow' }, [
       el('label', { class: 'field-label', text: 'Gap between songs (seconds)' }),
       intervalInput,
+    ]),
+    el('div', { class: 'control-group control-narrow' }, [
+      el('label', { class: 'field-label', text: 'Disc capacity (MiniDisc)' }),
+      discSelect,
     ]),
   )
 
@@ -250,106 +279,184 @@ function updateControls(notice?: string): void {
     user && user.product && user.product !== 'premium'
       ? 'Your account is not Premium — Spotify only allows playback control on Premium accounts.'
       : null
-  const messages = [notice, premiumWarning].filter(Boolean) as string[]
-  for (const msg of messages) {
+  for (const msg of [notice, premiumWarning].filter(Boolean) as string[]) {
     controlsEl.append(el('div', { class: 'notice', text: msg }))
   }
 }
 
-function updateControlsNotice(notice: string): void {
-  updateControls(notice)
-}
-
 // ===========================================================================
-// Albums grid
+// Library (Albums / Playlists tabs)
 // ===========================================================================
 
-function updateAlbums(): void {
-  clear(albumsEl)
+function updateLibrary(): void {
+  clear(libraryEl)
 
-  const header = el('div', { class: 'albums-header' }, [
-    el('h2', { text: `Your albums${albums.length ? ` (${albums.length})` : ''}` }),
+  const tabs = el('div', { class: 'tabs' }, [
+    libraryTab('albums', `Albums${albums.length ? ` (${albums.length})` : ''}`),
+    libraryTab(
+      'playlists',
+      `Playlists${playlistsLoaded ? ` (${playlists.length})` : ''}`,
+    ),
   ])
+
   const search = el('input', {
     class: 'field search',
     type: 'search',
-    placeholder: 'Filter albums…',
+    placeholder: libraryMode === 'albums' ? 'Filter albums…' : 'Filter playlists…',
     value: filterText,
   }) as HTMLInputElement
   search.addEventListener('input', () => {
     filterText = search.value.toLowerCase()
     renderGrid()
   })
-  header.append(search)
-  albumsEl.append(header)
 
+  libraryEl.append(el('div', { class: 'albums-header' }, [tabs, search]))
   const grid = el('div', { class: 'grid' })
-  albumsEl.append(grid)
+  libraryEl.append(grid)
 
   function renderGrid(): void {
     clear(grid)
-    const filtered = albums.filter(({ album }) => {
-      if (!filterText) return true
-      return (
-        album.name.toLowerCase().includes(filterText) ||
-        artistsText(album.artists).toLowerCase().includes(filterText)
+    if (libraryMode === 'albums') {
+      const filtered = albums.filter(({ album }) =>
+        matches(album.name, artistsText(album.artists)),
       )
-    })
-    if (filtered.length === 0) {
-      grid.append(el('p', { class: 'muted', text: 'No albums match.' }))
-      return
+      if (!filtered.length) return void grid.append(emptyNote())
+      for (const saved of filtered) grid.append(albumCard(saved))
+    } else {
+      const filtered = playlists.filter((p) =>
+        matches(p.name, p.owner.display_name ?? ''),
+      )
+      if (!filtered.length) return void grid.append(emptyNote())
+      for (const p of filtered) grid.append(playlistCard(p))
     }
-    for (const saved of filtered) grid.append(albumCard(saved))
   }
   renderGrid()
 }
 
+function matches(...fields: string[]): boolean {
+  if (!filterText) return true
+  return fields.some((f) => f.toLowerCase().includes(filterText))
+}
+
+function emptyNote(): HTMLElement {
+  return el('p', { class: 'muted', text: 'Nothing matches.' })
+}
+
+function libraryTab(mode: 'albums' | 'playlists', label: string): HTMLElement {
+  return el('button', {
+    class: `tab${libraryMode === mode ? ' tab-active' : ''}`,
+    text: label,
+    onclick: async () => {
+      if (libraryMode === mode) return
+      libraryMode = mode
+      filterText = ''
+      if (mode === 'playlists' && !playlistsLoaded) {
+        await loadPlaylists()
+      } else {
+        updateLibrary()
+      }
+    },
+  })
+}
+
 function albumCard(saved: SavedAlbum): HTMLElement {
   const { album } = saved
-  const cover = albumImage(album.images, 300)
-  return el('button', {
-    class: 'card',
-    onclick: () => void openDetail(album),
-  }, [
+  return mediaCard(
+    albumImage(album.images, 300),
+    album.name,
+    `${artistsText(album.artists)} · ${releaseYear(album.release_date)}`,
+    () => void openAlbum(album),
+  )
+}
+
+function playlistCard(p: SimplifiedPlaylist): HTMLElement {
+  return mediaCard(
+    albumImage(p.images, 300),
+    p.name,
+    `${p.owner.display_name ?? 'Playlist'} · ${p.tracks.total} tracks`,
+    () => void openPlaylist(p),
+  )
+}
+
+function mediaCard(
+  cover: string,
+  title: string,
+  sub: string,
+  onClick: () => void,
+): HTMLElement {
+  return el('button', { class: 'card', onclick: onClick }, [
     cover
       ? el('img', { class: 'card-cover', src: cover, alt: '', loading: 'lazy' })
       : el('div', { class: 'card-cover card-cover-empty' }),
-    el('div', { class: 'card-title', text: album.name, title: album.name }),
-    el('div', {
-      class: 'card-sub',
-      text: `${artistsText(album.artists)} · ${releaseYear(album.release_date)}`,
-    }),
+    el('div', { class: 'card-title', text: title, title }),
+    el('div', { class: 'card-sub', text: sub }),
   ])
 }
 
-function showAlbumsLoading(loaded: number, total: number): void {
-  clear(albumsEl)
-  albumsEl.append(
+function showLibraryLoading(what: string, loaded: number, total: number): void {
+  clear(libraryEl)
+  libraryEl.append(
     el('div', { class: 'loading' }, [
       el('div', { class: 'spinner' }),
       el('p', {
         class: 'muted',
-        text: total
-          ? `Loading your albums… ${loaded}/${total}`
-          : 'Loading your albums…',
+        text: total ? `Loading your ${what}… ${loaded}/${total}` : `Loading your ${what}…`,
       }),
     ]),
   )
 }
 
 // ===========================================================================
-// Album detail modal
+// Detail modal (album or playlist)
 // ===========================================================================
 
-async function openDetail(album: Album): Promise<void> {
-  detail = { album, tracks: album.tracks.items }
-  renderDetail(true)
+async function openAlbum(album: Album): Promise<void> {
+  detail = {
+    source: { kind: 'album', id: album.id, name: album.name, images: album.images },
+    tracks: album.tracks.items,
+    totalCount: album.total_tracks,
+    subtitle: `${artistsText(album.artists)} · ${releaseYear(album.release_date)}`,
+    loading: album.tracks.items.length < album.total_tracks,
+  }
+  renderDetail()
   try {
     const tracks = await api.getAlbumTracks(album)
-    detail = { album, tracks }
-    renderDetail(false)
+    if (detail?.source.id === album.id) {
+      detail.tracks = tracks
+      detail.loading = false
+      renderDetail()
+    }
   } catch (e) {
-    renderDetail(false, messageOf(e))
+    if (detail?.source.id === album.id) {
+      detail.loading = false
+      detail.error = messageOf(e)
+      renderDetail()
+    }
+  }
+}
+
+async function openPlaylist(p: SimplifiedPlaylist): Promise<void> {
+  detail = {
+    source: { kind: 'playlist', id: p.id, name: p.name, images: p.images },
+    tracks: [],
+    totalCount: p.tracks.total,
+    subtitle: `by ${p.owner.display_name ?? p.owner.id}`,
+    loading: true,
+  }
+  renderDetail()
+  try {
+    const tracks = await api.getPlaylistTracks(p.id)
+    if (detail?.source.id === p.id) {
+      detail.tracks = tracks
+      detail.loading = false
+      renderDetail()
+    }
+  } catch (e) {
+    if (detail?.source.id === p.id) {
+      detail.loading = false
+      detail.error = messageOf(e)
+      renderDetail()
+    }
   }
 }
 
@@ -359,79 +466,103 @@ function closeDetail(): void {
   clear(modalEl)
 }
 
-function renderDetail(loadingMore: boolean, error?: string): void {
+function renderDetail(): void {
   if (!detail) return
-  const { album, tracks } = detail
+  const { source, tracks, totalCount, subtitle, loading, error } = detail
   clear(modalEl)
   modalEl.hidden = false
 
   const canPlay = Boolean(selectedDeviceId)
-  const cover = albumImage(album.images, 300)
+  const cover = albumImage(source.images, 300)
+  const plan = planDiscs(tracks, discCapacityMin * 60_000)
+  const isPlaylist = source.kind === 'playlist'
 
-  const playAlbumBtn = el('button', {
+  const metaBits = [
+    `${totalCount} tracks`,
+    tracks.length ? totalMinutesLabel(tracks) : null,
+    plan.count > 1 ? `${plan.count} discs` : null,
+    subtitle,
+  ].filter(Boolean) as string[]
+
+  const playBtn = el('button', {
     class: 'btn btn-primary',
-    text: '▶ Play album',
-    disabled: !canPlay,
+    text: isPlaylist ? '▶ Play playlist' : '▶ Play album',
+    disabled: !canPlay || loading,
     title: canPlay ? '' : 'Select a device first',
-    onclick: () => startAlbum(0),
+    onclick: () => startPlaying(0),
   })
 
   const trackList = el('ol', { class: 'tracklist' })
+  let lastDisc = 0
   tracks.forEach((track, i) => {
+    const disc = plan.discOf[i] ?? 1
+    if (plan.count > 1 && disc !== lastDisc) {
+      lastDisc = disc
+      trackList.append(
+        el('li', { class: 'disc-divider' }, [
+          el('span', { text: `Disc ${disc}` }),
+          el('span', { class: 'muted small', text: msToClock(plan.durations[disc - 1] ?? 0) }),
+        ]),
+      )
+    }
     trackList.append(
       el('li', { class: 'track' }, [
-        el('span', { class: 'track-num', text: String(track.track_number || i + 1) }),
-        el('span', { class: 'track-name', text: track.name, title: track.name }),
+        el('span', { class: 'track-num', text: String(isPlaylist ? i + 1 : track.track_number || i + 1) }),
+        el('div', { class: 'track-main' }, [
+          el('div', { class: 'track-name', text: track.name, title: track.name }),
+          isPlaylist
+            ? el('div', { class: 'track-artist', text: artistsText(track.artists) })
+            : null,
+        ]),
         el('span', { class: 'track-dur', text: msToClock(track.duration_ms) }),
         el('button', {
           class: 'btn btn-ghost btn-sm',
           text: '▶',
-          title: canPlay ? 'Play album from here' : 'Select a device first',
+          title: canPlay ? 'Play from here' : 'Select a device first',
           disabled: !canPlay,
-          onclick: () => startAlbum(i),
+          onclick: () => startPlaying(i),
         }),
       ]),
     )
   })
 
-  const panel = el('div', { class: 'modal' }, [
-    el('button', { class: 'modal-close', text: '✕', onclick: () => closeDetail() }),
-    el('div', { class: 'modal-head' }, [
-      cover
-        ? el('img', { class: 'modal-cover', src: cover, alt: '' })
-        : el('div', { class: 'modal-cover card-cover-empty' }),
-      el('div', { class: 'modal-meta' }, [
-        el('h2', { class: 'modal-title', text: album.name }),
-        el('p', { class: 'muted', text: artistsText(album.artists) }),
-        el('p', { class: 'muted small', text:
-          `${album.total_tracks} tracks · ${releaseYear(album.release_date)}` }),
-        el('div', { class: 'modal-actions' }, [
-          playAlbumBtn,
-          !canPlay ? el('span', { class: 'muted small', text: 'Pick a device above to enable playback.' }) : null,
+  modalEl.append(
+    el('div', { class: 'modal' }, [
+      el('button', { class: 'modal-close', text: '✕', onclick: () => closeDetail() }),
+      el('div', { class: 'modal-head' }, [
+        cover
+          ? el('img', { class: 'modal-cover', src: cover, alt: '' })
+          : el('div', { class: 'modal-cover card-cover-empty' }),
+        el('div', { class: 'modal-meta' }, [
+          el('h2', { class: 'modal-title', text: source.name }),
+          el('p', { class: 'muted small', text: metaBits.join(' · ') }),
+          el('div', { class: 'modal-actions' }, [
+            playBtn,
+            !canPlay
+              ? el('span', { class: 'muted small', text: 'Pick a device above to enable playback.' })
+              : null,
+          ]),
         ]),
       ]),
+      error ? el('div', { class: 'notice', text: error }) : null,
+      loading ? el('p', { class: 'muted small', text: 'Loading full track list…' }) : null,
+      trackList,
     ]),
-    error ? el('div', { class: 'notice', text: error }) : null,
-    loadingMore && tracks.length < album.total_tracks
-      ? el('p', { class: 'muted small', text: 'Loading full track list…' })
-      : null,
-    trackList,
-  ])
-
-  modalEl.append(panel)
+  )
 }
 
 // ===========================================================================
 // Playback wiring
 // ===========================================================================
 
-function startAlbum(startIndex: number): void {
-  if (!detail || !selectedDeviceId) return
+function startPlaying(startIndex: number): void {
+  if (!detail || !selectedDeviceId || !detail.tracks.length) return
   sequencer.start({
-    album: detail.album,
+    source: detail.source,
     tracks: detail.tracks,
     deviceId: selectedDeviceId,
     intervalSec,
+    discCapacityMin,
     startIndex,
   })
   closeDetail()
@@ -459,14 +590,31 @@ function updateNowPlaying(snap: SequencerSnapshot): void {
     return
   }
 
+  // Disc-change prompt takes over the whole bar.
+  if (snap.state === 'discchange' && snap.pendingDiscChange) {
+    const { from, to } = snap.pendingDiscChange
+    nowPlayingEl.append(
+      el('div', { class: 'np-discchange' }, [
+        el('span', { class: 'np-disc-msg', html:
+          `💿 <strong>Disc ${from} full.</strong> Insert disc ${to} of ${snap.discCount}, then confirm.` }),
+        el('div', { class: 'np-controls' }, [
+          el('button', { class: 'btn btn-primary', text: `Disc ${to} inserted → continue`, onclick: () => sequencer.confirmDiscChange() }),
+          el('button', { class: 'btn btn-ghost btn-sm', text: '⏹ Stop', onclick: () => sequencer.stop() }),
+        ]),
+      ]),
+    )
+    return
+  }
+
   const track = snap.currentTrack
-  const album = snap.album
-  const cover = album ? albumImage(album.images, 100) : ''
+  const source = snap.source
+  const cover =
+    (track?.album?.images?.length ? albumImage(track.album.images, 100) : '') ||
+    (source ? albumImage(source.images, 100) : '')
   const inInterval =
     snap.state === 'interval' ||
     (snap.state === 'paused' && snap.pausedFrom === 'interval')
 
-  // Progress / countdown bar
   const pct = inInterval
     ? snap.intervalMs > 0
       ? 100 - (snap.intervalRemainingMs / snap.intervalMs) * 100
@@ -482,7 +630,7 @@ function updateNowPlaying(snap: SequencerSnapshot): void {
   const statusText = inInterval
     ? `Gap · next in ${(snap.intervalRemainingMs / 1000).toFixed(1)}s`
     : snap.state === 'done'
-      ? 'Album finished'
+      ? 'Finished'
       : snap.state === 'paused'
         ? 'Paused'
         : `${msToClock(snap.progressMs)} / ${msToClock(snap.durationMs)}`
@@ -490,38 +638,31 @@ function updateNowPlaying(snap: SequencerSnapshot): void {
   const isPaused = snap.state === 'paused'
   const isDone = snap.state === 'done'
 
-  const controls = el('div', { class: 'np-controls' }, [
-    el('button', { class: 'btn btn-ghost np-btn', text: '⏮', title: 'Previous track', disabled: isDone, onclick: () => sequencer.previous() }),
-    el('button', {
-      class: 'btn btn-primary np-btn np-play',
-      text: isPaused ? '▶' : '⏸',
-      title: isPaused ? 'Resume' : 'Pause',
-      disabled: isDone,
-      onclick: () => sequencer.pauseResume(),
-    }),
-    el('button', { class: 'btn btn-ghost np-btn', text: '⏭', title: 'Next track', disabled: isDone, onclick: () => sequencer.next() }),
-    inInterval
-      ? el('button', { class: 'btn btn-ghost btn-sm', text: 'Skip gap', onclick: () => sequencer.skipInterval() })
-      : null,
-    el('button', { class: 'btn btn-ghost btn-sm', text: '⏹ Stop', onclick: () => sequencer.stop() }),
-  ])
+  const discLabel =
+    snap.discCount > 1 ? `Disc ${snap.currentDisc}/${snap.discCount} · ` : ''
 
   nowPlayingEl.append(
     el('div', { class: 'np-track' }, [
       cover ? el('img', { class: 'np-cover', src: cover, alt: '' }) : el('div', { class: 'np-cover card-cover-empty' }),
       el('div', { class: 'np-meta' }, [
         el('div', { class: 'np-name', text: track?.name ?? (isDone ? 'Done' : '—') }),
-        el('div', { class: 'np-sub', text: track ? artistsText(track.artists) : album?.name ?? '' }),
+        el('div', { class: 'np-sub', text: track ? artistsText(track.artists) : source?.name ?? '' }),
       ]),
     ]),
     el('div', { class: 'np-center' }, [
       el('div', { class: 'np-status' }, [
-        el('span', { class: 'np-count', text: album ? `Track ${snap.index + 1} / ${snap.tracks.length}` : '' }),
+        el('span', { class: 'np-count', text: source ? `${discLabel}Track ${snap.index + 1} / ${snap.tracks.length}` : '' }),
         el('span', { class: 'np-time', text: statusText }),
       ]),
       bar,
     ]),
-    controls,
+    el('div', { class: 'np-controls' }, [
+      el('button', { class: 'btn btn-ghost np-btn', text: '⏮', title: 'Previous track', disabled: isDone, onclick: () => sequencer.previous() }),
+      el('button', { class: 'btn btn-primary np-btn np-play', text: isPaused ? '▶' : '⏸', title: isPaused ? 'Resume' : 'Pause', disabled: isDone, onclick: () => sequencer.pauseResume() }),
+      el('button', { class: 'btn btn-ghost np-btn', text: '⏭', title: 'Next track', disabled: isDone, onclick: () => sequencer.next() }),
+      inInterval ? el('button', { class: 'btn btn-ghost btn-sm', text: 'Skip gap', onclick: () => sequencer.skipInterval() }) : null,
+      el('button', { class: 'btn btn-ghost btn-sm', text: '⏹ Stop', onclick: () => sequencer.stop() }),
+    ]),
   )
 }
 
@@ -539,22 +680,39 @@ async function loadDevices(): Promise<void> {
     if (selectedDeviceId) sequencer.setDeviceId(selectedDeviceId)
   } catch (e) {
     devices = []
-    updateControlsNotice(messageOf(e))
+    updateControls(messageOf(e))
     return
   }
   updateControls()
 }
 
 async function loadAlbums(): Promise<void> {
-  showAlbumsLoading(0, 0)
+  if (libraryMode === 'albums') showLibraryLoading('albums', 0, 0)
   try {
-    albums = await api.getAllSavedAlbums((loaded, total) => showAlbumsLoading(loaded, total))
+    albums = await api.getAllSavedAlbums((loaded, total) => {
+      if (libraryMode === 'albums') showLibraryLoading('albums', loaded, total)
+    })
   } catch (e) {
-    clear(albumsEl)
-    albumsEl.append(el('div', { class: 'notice', text: messageOf(e) }))
+    clear(libraryEl)
+    libraryEl.append(el('div', { class: 'notice', text: messageOf(e) }))
     return
   }
-  updateAlbums()
+  updateLibrary()
+}
+
+async function loadPlaylists(): Promise<void> {
+  showLibraryLoading('playlists', 0, 0)
+  try {
+    playlists = await api.getAllPlaylists((loaded, total) =>
+      showLibraryLoading('playlists', loaded, total),
+    )
+    playlistsLoaded = true
+  } catch (e) {
+    clear(libraryEl)
+    libraryEl.append(el('div', { class: 'notice', text: messageOf(e) }))
+    return
+  }
+  updateLibrary()
 }
 
 // ===========================================================================

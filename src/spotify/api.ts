@@ -4,7 +4,9 @@ import type {
   Device,
   PlaybackState,
   Paging,
+  PlaylistTrackItem,
   SavedAlbum,
+  SimplifiedPlaylist,
   SpotifyUser,
   Track,
 } from './types'
@@ -139,6 +141,54 @@ export async function getAlbumTracks(album: Album): Promise<Track[]> {
     const page = await request<Paging<Track>>(next)
     tracks.push(...page.items)
     next = page.next
+  }
+  return tracks
+}
+
+// ---------------------------------------------------------------------------
+// Library: every playlist the user owns or follows (handles pagination).
+// ---------------------------------------------------------------------------
+
+export async function getAllPlaylists(
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<SimplifiedPlaylist[]> {
+  const all: SimplifiedPlaylist[] = []
+  let page = await request<Paging<SimplifiedPlaylist>>('/me/playlists', {
+    query: { limit: 50, offset: 0 },
+  })
+  // The API occasionally returns null entries for unavailable playlists.
+  all.push(...page.items.filter(Boolean))
+  onProgress?.(all.length, page.total)
+
+  while (page.next) {
+    page = await request<Paging<SimplifiedPlaylist>>(page.next)
+    all.push(...page.items.filter(Boolean))
+    onProgress?.(all.length, page.total)
+  }
+  return all
+}
+
+/**
+ * Returns every playable track of a playlist, in order. Skips removed entries,
+ * local files, and podcast episodes (only `spotify:track:` URIs are kept).
+ */
+export async function getPlaylistTracks(playlistId: string): Promise<Track[]> {
+  const tracks: Track[] = []
+  const collect = (items: PlaylistTrackItem[]): void => {
+    for (const item of items) {
+      const t = item?.track
+      if (t && t.uri && t.uri.startsWith('spotify:track:')) tracks.push(t)
+    }
+  }
+
+  let page = await request<Paging<PlaylistTrackItem>>(
+    `/playlists/${playlistId}/tracks`,
+    { query: { limit: 100, offset: 0, additional_types: 'track' } },
+  )
+  collect(page.items)
+  while (page.next) {
+    page = await request<Paging<PlaylistTrackItem>>(page.next)
+    collect(page.items)
   }
   return tracks
 }

@@ -1,8 +1,14 @@
 # Album Sequencer
 
-A one-page web app that signs into Spotify, lists **all your saved albums**, and
-plays an album **track-by-track with a customizable gap between songs** (default
-**5 seconds**) on any Spotify Connect device.
+A one-page web app for **dubbing Spotify albums and playlists to MiniDisc** (or
+any device). It signs into Spotify, lists **all your saved albums and
+playlists**, and plays them **track-by-track with a customizable gap between
+songs** (default **5 seconds**, to mark track boundaries on the recorder) on any
+Spotify Connect device.
+
+It also **splits a release across discs** by MiniDisc length (60 / 74 / 80 min)
+and **pauses for a "disc changed?" confirmation** at each disc boundary, so you
+can swap discs without losing your place.
 
 It controls playback via the Spotify Web API rather than streaming audio itself,
 so if you point it at a device set to **Lossless** (e.g. the Spotify desktop
@@ -67,11 +73,15 @@ Open **https://127.0.0.1:5005**.
 1. Open **https://127.0.0.1:5005** and **Connect Spotify**, then approve the requested scopes.
 2. Make sure a device is available (open the Spotify desktop app). Pick it from
    **Playback device** — hit **↻ Devices** if it isn't listed yet.
-3. Set the **gap between songs** in seconds (default 5).
-4. Click an album, then **Play album** (or ▶ on a track to start from there).
-5. The bottom bar shows the current track, a green progress bar while playing and
-   an **amber countdown** during each gap, plus prev / pause / next / stop and a
-   **Skip gap** button.
+3. Set the **gap between songs** in seconds (default 5) and the **disc capacity**
+   (Off / 60 / 74 / 80 min — default 74 for MiniDisc).
+4. Switch between the **Albums** and **Playlists** tabs, click one to open it, and
+   review the info screen (track count, total minutes, and how many discs it
+   needs). Then **Play** (or ▶ on a track to start from there).
+5. The bottom bar shows the current track, the current **disc**, a green progress
+   bar while playing, an **amber countdown** during each gap, plus prev / pause /
+   next / stop and a **Skip gap** button. At a disc boundary it pauses and asks
+   you to confirm you swapped the disc before continuing.
 
 ## How the gap works
 
@@ -103,10 +113,11 @@ src/
   style.css          # dark theme
   spotify/
     auth.ts          # PKCE login / token refresh
-    api.ts           # typed Web API client
+    api.ts           # typed Web API client (albums, playlists, devices, player)
     types.ts         # Spotify response types
   player/
-    sequencer.ts     # album playback engine + inter-track gap
+    sequencer.ts     # playback engine + inter-track gap + disc-change pauses
+    discs.ts         # split a track list into fixed-length discs
   ui/
     dom.ts, format.ts
 ```

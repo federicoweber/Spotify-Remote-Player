@@ -1,6 +1,7 @@
 import * as api from '../spotify/api'
 import { SpotifyApiError } from '../spotify/api'
-import type { Album, Track } from '../spotify/types'
+import { planDiscs } from './discs'
+import type { PlaybackSource, Track } from '../spotify/types'
 
 // Spotify has no native "gap between songs" feature, so we drive the album
 // ourselves: play ONE track at a time (uris: [trackUri], no context), watch it
@@ -8,11 +9,17 @@ import type { Album, Track } from '../spotify/types'
 // starting the next track. All audio decodes on the chosen Connect device, so
 // a device set to "Lossless" plays losslessly — we only send commands.
 
-export type SequencerState = 'idle' | 'playing' | 'interval' | 'paused' | 'done'
+export type SequencerState =
+  | 'idle'
+  | 'playing'
+  | 'interval'
+  | 'discchange'
+  | 'paused'
+  | 'done'
 
 export interface SequencerSnapshot {
   state: SequencerState
-  album: Album | null
+  source: PlaybackSource | null
   tracks: Track[]
   index: number
   currentTrack: Track | null
@@ -22,6 +29,11 @@ export interface SequencerSnapshot {
   intervalRemainingMs: number
   /** 'playing' or 'interval' when state === 'paused', else null */
   pausedFrom: 'playing' | 'interval' | null
+  /** Disc the current track lives on (1-based), and total disc count. */
+  currentDisc: number
+  discCount: number
+  /** Set while state === 'discchange': which disc to swap from/to. */
+  pendingDiscChange: { from: number; to: number } | null
   deviceId: string | null
   error: string | null
 }
@@ -39,12 +51,16 @@ type Listener = (snap: SequencerSnapshot) => void
 
 export class AlbumSequencer {
   private state: SequencerState = 'idle'
-  private album: Album | null = null
+  private source: PlaybackSource | null = null
   private tracks: Track[] = []
   private index = 0
 
   private deviceId: string | null = null
   private intervalMs = 5000
+  private discCapacityMs = 74 * 60_000 // MiniDisc default (74 min)
+  private discOf: number[] = []
+  private discCount = 0
+  private pendingDiscChange: { from: number; to: number } | null = null
 
   private progressMs = 0
   private durationMs = 0
@@ -81,7 +97,7 @@ export class AlbumSequencer {
   snapshot(): SequencerSnapshot {
     return {
       state: this.state,
-      album: this.album,
+      source: this.source,
       tracks: this.tracks,
       index: this.index,
       currentTrack: this.tracks[this.index] ?? null,
@@ -90,6 +106,9 @@ export class AlbumSequencer {
       intervalMs: this.intervalMs,
       intervalRemainingMs: this.intervalRemainingMs,
       pausedFrom: this.pausedFrom,
+      currentDisc: this.discOf[this.index] ?? 1,
+      discCount: this.discCount || (this.tracks.length ? 1 : 0),
+      pendingDiscChange: this.pendingDiscChange,
       deviceId: this.deviceId,
       error: this.error,
     }
@@ -98,19 +117,25 @@ export class AlbumSequencer {
   // --- public controls ------------------------------------------------------
 
   start(opts: {
-    album: Album
+    source: PlaybackSource
     tracks: Track[]
     deviceId: string
     intervalSec: number
+    discCapacityMin?: number
     startIndex?: number
   }): void {
     this.stopAllTimers()
-    this.album = opts.album
+    this.source = opts.source
     this.tracks = opts.tracks
     this.deviceId = opts.deviceId
     this.intervalMs = secondsToMs(opts.intervalSec)
+    if (opts.discCapacityMin !== undefined) {
+      this.discCapacityMs = minutesToMs(opts.discCapacityMin)
+    }
     this.index = opts.startIndex ?? 0
+    this.pendingDiscChange = null
     this.error = null
+    this.replanDiscs()
     void this.playCurrent()
   }
 
@@ -187,6 +212,7 @@ export class AlbumSequencer {
     this.stopAllTimers()
     this.state = 'idle'
     this.pausedFrom = null
+    this.pendingDiscChange = null
     this.progressMs = 0
     this.intervalRemainingMs = 0
     this.safePause()
@@ -209,6 +235,19 @@ export class AlbumSequencer {
     this.deviceId = deviceId
   }
 
+  /** Set MiniDisc capacity in minutes (0 = no splitting). Re-plans live. */
+  setDiscCapacityMinutes(min: number): void {
+    this.discCapacityMs = minutesToMs(min)
+    this.replanDiscs()
+    this.emit()
+  }
+
+  private replanDiscs(): void {
+    const plan = planDiscs(this.tracks, this.discCapacityMs)
+    this.discOf = plan.discOf
+    this.discCount = plan.count
+  }
+
   // --- internal state machine ----------------------------------------------
 
   private async playCurrent(): Promise<void> {
@@ -219,6 +258,7 @@ export class AlbumSequencer {
     }
     this.state = 'playing'
     this.pausedFrom = null
+    this.pendingDiscChange = null
     this.progressMs = 0
     this.durationMs = track.duration_ms
     this.hasPlayed = false
@@ -315,9 +355,31 @@ export class AlbumSequencer {
     this.progressMs = this.durationMs
     if (this.index >= this.tracks.length - 1) {
       this.finish()
+      return
+    }
+    const nextIdx = this.index + 1
+    const fromDisc = this.discOf[this.index] ?? 1
+    const toDisc = this.discOf[nextIdx] ?? 1
+    if (toDisc !== fromDisc) {
+      this.startDiscChange(fromDisc, toDisc)
     } else {
       this.startInterval()
     }
+  }
+
+  private startDiscChange(from: number, to: number): void {
+    this.state = 'discchange'
+    this.pendingDiscChange = { from, to }
+    // Stop the device so nothing plays while the disc is being swapped.
+    this.safePause()
+    this.emit()
+  }
+
+  /** User confirmed they swapped the disc — continue with the next track. */
+  confirmDiscChange(): void {
+    if (this.state !== 'discchange') return
+    this.pendingDiscChange = null
+    this.advance() // no inter-track gap across a disc boundary
   }
 
   private startInterval(): void {
@@ -357,6 +419,7 @@ export class AlbumSequencer {
     this.stopAllTimers()
     this.state = 'done'
     this.pausedFrom = null
+    this.pendingDiscChange = null
     this.intervalRemainingMs = 0
     this.emit()
   }
@@ -365,6 +428,7 @@ export class AlbumSequencer {
     this.stopAllTimers()
     this.error = message
     this.state = 'idle'
+    this.pendingDiscChange = null
     this.emit()
   }
 
@@ -412,6 +476,11 @@ export class AlbumSequencer {
 function secondsToMs(sec: number): number {
   if (!Number.isFinite(sec) || sec < 0) return 0
   return Math.round(sec * 1000)
+}
+
+function minutesToMs(min: number): number {
+  if (!Number.isFinite(min) || min <= 0) return 0
+  return Math.round(min * 60_000)
 }
 
 function friendlyError(e: unknown): string {

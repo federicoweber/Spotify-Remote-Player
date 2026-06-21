@@ -6,12 +6,16 @@ const AUTH_ENDPOINT = 'https://accounts.spotify.com/authorize'
 const TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token'
 
 // Scopes:
-//  - user-library-read       → read the user's saved albums
-//  - user-read-playback-state → list devices + read what's playing
+//  - user-library-read         → read the user's saved albums
+//  - playlist-read-private      → read the user's private playlists
+//  - playlist-read-collaborative → read collaborative playlists
+//  - user-read-playback-state  → list devices + read what's playing
 //  - user-modify-playback-state → start/pause/seek/transfer playback
-//  - user-read-private        → read profile (to surface the Premium requirement)
+//  - user-read-private          → read profile (to surface the Premium requirement)
 const SCOPES = [
   'user-library-read',
+  'playlist-read-private',
+  'playlist-read-collaborative',
   'user-read-playback-state',
   'user-modify-playback-state',
   'user-read-private',
