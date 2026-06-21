@@ -28,9 +28,9 @@ this app remote-controls one of those apps over **Spotify Connect**.
 ### 1. Create a Spotify app
 
 1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and **Create app**.
-2. Add this **Redirect URI** exactly: `http://127.0.0.1:5005`
-   (Spotify rejects `localhost` as "Insecure" — you must use the loopback IP
-   literal `127.0.0.1`. Plain HTTP is allowed for loopback addresses.)
+2. Add this **Redirect URI** exactly: `https://127.0.0.1:5005`
+   (The dashboard requires HTTPS, and the login flow rejects `localhost` as
+   "Insecure" — so use HTTPS with the loopback IP literal `127.0.0.1`.)
 3. Copy the app's **Client ID**.
 
 ### 2. Configure
@@ -44,7 +44,7 @@ cp .env.example .env
 
 (You can also paste the Client ID into the app's sign-in screen instead.)
 
-The redirect URI defaults to `http://127.0.0.1:5005` to match the dashboard
+The redirect URI defaults to `https://127.0.0.1:5005` to match the dashboard
 entry above. If you registered a different URI, set `VITE_SPOTIFY_REDIRECT_URI`
 to match it **exactly**.
 
@@ -55,15 +55,16 @@ npm install
 npm run dev
 ```
 
-Open **http://127.0.0.1:5005**.
+Open **https://127.0.0.1:5005**.
 
-> No HTTPS or certificate is needed: Spotify permits plain HTTP for loopback
-> addresses, and browsers treat `http://127.0.0.1` as a secure context (so the
-> PKCE crypto works).
+> The dev server uses a self-signed certificate (`@vitejs/plugin-basic-ssl`), so
+> your browser warns the first time — click **Advanced → Proceed** to accept it.
+> To avoid the warning entirely, generate a locally-trusted cert with
+> [`mkcert`](https://github.com/FiloSottile/mkcert) and point Vite's `server.https` at it.
 
 ## Using it
 
-1. Open **http://127.0.0.1:5005** and **Connect Spotify**, then approve the requested scopes.
+1. Open **https://127.0.0.1:5005** and **Connect Spotify**, then approve the requested scopes.
 2. Make sure a device is available (open the Spotify desktop app). Pick it from
    **Playback device** — hit **↻ Devices** if it isn't listed yet.
 3. Set the **gap between songs** in seconds (default 5).
@@ -84,7 +85,7 @@ the Spotify app — this tool can't set it over the API.
 
 | Command           | Description                                  |
 | ----------------- | -------------------------------------------- |
-| `npm run dev`     | Start the dev server on `http://127.0.0.1:5005` |
+| `npm run dev`     | Start the dev server on `https://127.0.0.1:5005` |
 | `npm run build`   | Type-check (`tsc`) and build to `dist/`      |
 | `npm run preview` | Serve the production build on `:5005`        |
 
@@ -114,7 +115,7 @@ src/
 
 **`redirect_uri: Insecure` / `INVALID_CLIENT: Insecure redirect URI`.** Spotify
 no longer accepts `localhost` as a redirect host. Use the loopback IP literal
-(`http://127.0.0.1:5005`) in both the dashboard and `VITE_SPOTIFY_REDIRECT_URI`.
+(`https://127.0.0.1:5005`) in both the dashboard and `VITE_SPOTIFY_REDIRECT_URI`.
 
 **`INVALID_CLIENT: Invalid redirect URI`.** The redirect URI sent by the app must
 match the dashboard entry character-for-character. Confirm
