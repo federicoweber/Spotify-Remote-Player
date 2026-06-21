@@ -18,6 +18,13 @@
   box-sizing: border-box;
 }
 
+/* The [hidden] attribute must win over component rules that set display
+   (e.g. .modal-backdrop / .nowplaying use display: grid). Without this the
+   blurred modal overlay stays on top of the whole page. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
