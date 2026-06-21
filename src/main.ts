@@ -270,7 +270,7 @@ function updateControls(notice?: string): void {
       intervalInput,
     ]),
     el('div', { class: 'control-group control-narrow' }, [
-      el('label', { class: 'field-label', text: 'Disc capacity (MiniDisc)' }),
+      el('label', { class: 'field-label', text: 'Disc capacity' }),
       discSelect,
     ]),
   )
