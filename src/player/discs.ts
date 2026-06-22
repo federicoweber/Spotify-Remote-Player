@@ -15,22 +15,42 @@ export interface DiscPlan {
 }
 
 export function planDiscs(tracks: Track[], capacityMs: number): DiscPlan {
-  const discOf: number[] = []
-  const durations: number[] = []
-  const splitting = capacityMs > 0
+  return planFromBreaks(tracks, breaksFromCapacity(tracks, capacityMs))
+}
 
-  let disc = 1
+/**
+ * Track indices at which a new disc begins (sorted, 1-based positions in the
+ * list). e.g. [4, 9] → disc 1 = tracks 0–3, disc 2 = 4–8, disc 3 = 9+.
+ */
+export function breaksFromCapacity(tracks: Track[], capacityMs: number): number[] {
+  if (capacityMs <= 0) return []
+  const breaks: number[] = []
   let acc = 0
-  for (const track of tracks) {
-    const d = track.duration_ms || 0
-    if (splitting && acc > 0 && acc + d > capacityMs) {
-      disc++
+  for (let i = 0; i < tracks.length; i++) {
+    const d = tracks[i].duration_ms || 0
+    if (acc > 0 && acc + d > capacityMs) {
+      breaks.push(i)
       acc = 0
     }
-    discOf.push(disc)
-    durations[disc - 1] = (durations[disc - 1] || 0) + d
     acc += d
   }
+  return breaks
+}
 
+/** Build a disc plan from explicit break points (manual or auto-derived). */
+export function planFromBreaks(tracks: Track[], breaks: number[]): DiscPlan {
+  const sorted = [...breaks].sort((a, b) => a - b)
+  const discOf: number[] = []
+  const durations: number[] = []
+  let disc = 1
+  let bi = 0
+  for (let i = 0; i < tracks.length; i++) {
+    while (bi < sorted.length && sorted[bi] === i) {
+      disc++
+      bi++
+    }
+    discOf.push(disc)
+    durations[disc - 1] = (durations[disc - 1] || 0) + (tracks[i].duration_ms || 0)
+  }
   return { discOf, count: tracks.length ? disc : 0, durations }
 }

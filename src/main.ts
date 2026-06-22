@@ -4,7 +4,7 @@ import * as api from './spotify/api'
 import { SpotifyApiError } from './spotify/api'
 import { AlbumSequencer } from './player/sequencer'
 import type { SequencerSnapshot } from './player/sequencer'
-import { planDiscs } from './player/discs'
+import { breaksFromCapacity, planFromBreaks } from './player/discs'
 import { el, clear } from './ui/dom'
 import {
   albumImage,
@@ -52,6 +52,8 @@ let detail: {
   subtitle: string
   loading: boolean
   error?: string
+  /** Manual disc break points; null = auto-split by capacity. */
+  breaks: number[] | null
 } | null = null
 
 // ---- stable section containers (built once in renderShell) ----------------
@@ -263,7 +265,10 @@ function updateControls(notice?: string): void {
   discSelect.addEventListener('change', () => {
     discCapacityMin = Number(discSelect.value)
     sequencer.setDiscCapacityMinutes(discCapacityMin)
-    if (detail) renderDetail()
+    if (detail) {
+      detail.breaks = null // changing capacity resets manual splits
+      renderDetail()
+    }
   })
 
   controlsEl.append(
@@ -443,6 +448,7 @@ async function openAlbum(album: Album): Promise<void> {
     totalCount: album.total_tracks,
     subtitle: `${artistsText(album.artists)} · ${releaseYear(album.release_date)}`,
     loading: album.tracks.items.length < album.total_tracks,
+    breaks: null,
   }
   renderDetail()
   try {
@@ -468,6 +474,7 @@ async function openPlaylist(p: SimplifiedPlaylist): Promise<void> {
     totalCount: p.tracks.total,
     subtitle: `by ${p.owner.display_name ?? p.owner.id}`,
     loading: true,
+    breaks: null,
   }
   renderDetail()
   try {
@@ -492,6 +499,11 @@ function closeDetail(): void {
   clear(modalEl)
 }
 
+function currentBreaks(): number[] {
+  if (!detail) return []
+  return detail.breaks ?? breaksFromCapacity(detail.tracks, discCapacityMin * 60_000)
+}
+
 function renderDetail(): void {
   if (!detail) return
   const { source, tracks, totalCount, subtitle, loading, error } = detail
@@ -500,13 +512,13 @@ function renderDetail(): void {
 
   const canPlay = Boolean(selectedDeviceId)
   const cover = albumImage(source.images, 300)
-  const plan = planDiscs(tracks, discCapacityMin * 60_000)
   const isPlaylist = source.kind === 'playlist'
+  const discCount = planFromBreaks(tracks, currentBreaks()).count
 
   const metaBits = [
     `${totalCount} tracks`,
     tracks.length ? totalMinutesLabel(tracks) : null,
-    plan.count > 1 ? `${plan.count} discs` : null,
+    discCount > 1 ? `${discCount} discs` : null,
     subtitle,
   ].filter(Boolean) as string[]
 
@@ -519,38 +531,100 @@ function renderDetail(): void {
   })
 
   const trackList = el('ol', { class: 'tracklist' })
-  let lastDisc = 0
-  tracks.forEach((track, i) => {
-    const disc = plan.discOf[i] ?? 1
-    if (plan.count > 1 && disc !== lastDisc) {
-      lastDisc = disc
+
+  // Pixels per track row — translates a drag distance into how many tracks
+  // the disc boundary should move.
+  const rowHeight = (): number => {
+    const row = trackList.querySelector<HTMLElement>('.track')
+    return row?.offsetHeight || 48
+  }
+
+  const attachDragHandle = (divider: HTMLElement, breakPos: number): void => {
+    divider.addEventListener('pointerdown', (e) => {
+      if (!detail) return
+      e.preventDefault()
+      // First drag converts the auto split into an editable manual one.
+      detail.breaks = [...currentBreaks()]
+      const arr = detail.breaks
+      const startY = e.clientY
+      const startVal = arr[breakPos]
+      const step = rowHeight()
+      document.body.classList.add('dragging')
+
+      const onMove = (ev: PointerEvent): void => {
+        const delta = Math.round((ev.clientY - startY) / step)
+        // Keep boundaries ordered and within the track range.
+        const lower = breakPos > 0 ? arr[breakPos - 1] + 1 : 1
+        const upper =
+          breakPos < arr.length - 1 ? arr[breakPos + 1] - 1 : tracks.length - 1
+        const next = Math.max(lower, Math.min(upper, startVal + delta))
+        if (next !== arr[breakPos]) {
+          arr[breakPos] = next
+          fillTracks()
+        }
+      }
+      const onUp = (): void => {
+        document.removeEventListener('pointermove', onMove)
+        document.removeEventListener('pointerup', onUp)
+        document.body.classList.remove('dragging')
+      }
+      document.addEventListener('pointermove', onMove)
+      document.addEventListener('pointerup', onUp)
+    })
+  }
+
+  const capMs = discCapacityMin * 60_000
+  function fillTracks(): void {
+    clear(trackList)
+    const plan = planFromBreaks(tracks, currentBreaks())
+    let lastDisc = 0
+    let breakIdx = -1
+    tracks.forEach((track, i) => {
+      const disc = plan.discOf[i] ?? 1
+      if (plan.count > 1 && disc !== lastDisc) {
+        lastDisc = disc
+        const draggable = disc >= 2 && !loading
+        if (disc >= 2) breakIdx++
+        const discMs = plan.durations[disc - 1] ?? 0
+        const over = capMs > 0 && discMs > capMs
+        const divider = el(
+          'li',
+          { class: `disc-divider${draggable ? ' disc-divider-drag' : ''}` },
+          [
+            el('span', { text: `Disc ${disc}` }),
+            draggable ? el('span', { class: 'disc-grip', text: '⇕ drag to move split' }) : null,
+            el('span', {
+              class: over ? 'small disc-over' : 'muted small',
+              text: `${msToClock(discMs)}${over ? ' over' : ''}`,
+              title: over ? `Exceeds ${discCapacityMin} min disc capacity` : '',
+            }),
+          ],
+        )
+        if (draggable) attachDragHandle(divider, breakIdx)
+        trackList.append(divider)
+      }
       trackList.append(
-        el('li', { class: 'disc-divider' }, [
-          el('span', { text: `Disc ${disc}` }),
-          el('span', { class: 'muted small', text: msToClock(plan.durations[disc - 1] ?? 0) }),
+        el('li', { class: 'track' }, [
+          el('span', { class: 'track-num', text: String(isPlaylist ? i + 1 : track.track_number || i + 1) }),
+          el('div', { class: 'track-main' }, [
+            el('div', { class: 'track-name', text: track.name, title: track.name }),
+            isPlaylist
+              ? el('div', { class: 'track-artist', text: artistsText(track.artists) })
+              : null,
+          ]),
+          el('span', { class: 'track-dur', text: msToClock(track.duration_ms) }),
+          el('button', {
+            class: 'btn btn-ghost btn-sm',
+            text: '▶',
+            title: canPlay ? 'Play from here' : 'Select a device first',
+            disabled: !canPlay,
+            onclick: () => startPlaying(i),
+          }),
         ]),
       )
-    }
-    trackList.append(
-      el('li', { class: 'track' }, [
-        el('span', { class: 'track-num', text: String(isPlaylist ? i + 1 : track.track_number || i + 1) }),
-        el('div', { class: 'track-main' }, [
-          el('div', { class: 'track-name', text: track.name, title: track.name }),
-          isPlaylist
-            ? el('div', { class: 'track-artist', text: artistsText(track.artists) })
-            : null,
-        ]),
-        el('span', { class: 'track-dur', text: msToClock(track.duration_ms) }),
-        el('button', {
-          class: 'btn btn-ghost btn-sm',
-          text: '▶',
-          title: canPlay ? 'Play from here' : 'Select a device first',
-          disabled: !canPlay,
-          onclick: () => startPlaying(i),
-        }),
-      ]),
-    )
-  })
+    })
+  }
+  fillTracks()
 
   modalEl.append(
     el('div', { class: 'modal' }, [
@@ -589,6 +663,8 @@ function startPlaying(startIndex: number): void {
     deviceId: selectedDeviceId,
     intervalSec,
     discCapacityMin,
+    // Honor manually-dragged splits; otherwise the sequencer auto-splits by capacity.
+    discBreaks: detail.breaks ?? undefined,
     startIndex,
   })
   closeDetail()

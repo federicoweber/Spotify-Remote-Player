@@ -1,6 +1,6 @@
 import * as api from '../spotify/api'
 import { SpotifyApiError } from '../spotify/api'
-import { planDiscs } from './discs'
+import { breaksFromCapacity, planFromBreaks } from './discs'
 import type { PlaybackSource, Track } from '../spotify/types'
 
 // Spotify has no native "gap between songs" feature, so we drive the album
@@ -58,6 +58,7 @@ export class AlbumSequencer {
   private deviceId: string | null = null
   private intervalMs = 5000
   private discCapacityMs = 74 * 60_000 // MiniDisc default (74 min)
+  private discBreaks: number[] = [] // track indices where a new disc starts
   private discOf: number[] = []
   private discCount = 0
   private pendingDiscChange: { from: number; to: number } | null = null
@@ -122,6 +123,8 @@ export class AlbumSequencer {
     deviceId: string
     intervalSec: number
     discCapacityMin?: number
+    /** Explicit disc break points; overrides capacity-based splitting. */
+    discBreaks?: number[]
     startIndex?: number
   }): void {
     this.stopAllTimers()
@@ -132,10 +135,12 @@ export class AlbumSequencer {
     if (opts.discCapacityMin !== undefined) {
       this.discCapacityMs = minutesToMs(opts.discCapacityMin)
     }
+    this.discBreaks =
+      opts.discBreaks ?? breaksFromCapacity(this.tracks, this.discCapacityMs)
     this.index = opts.startIndex ?? 0
     this.pendingDiscChange = null
     this.error = null
-    this.replanDiscs()
+    this.applyDiscPlan()
     void this.playCurrent()
   }
 
@@ -235,15 +240,16 @@ export class AlbumSequencer {
     this.deviceId = deviceId
   }
 
-  /** Set MiniDisc capacity in minutes (0 = no splitting). Re-plans live. */
+  /** Set disc capacity in minutes (0 = no splitting). Re-plans live. */
   setDiscCapacityMinutes(min: number): void {
     this.discCapacityMs = minutesToMs(min)
-    this.replanDiscs()
+    this.discBreaks = breaksFromCapacity(this.tracks, this.discCapacityMs)
+    this.applyDiscPlan()
     this.emit()
   }
 
-  private replanDiscs(): void {
-    const plan = planDiscs(this.tracks, this.discCapacityMs)
+  private applyDiscPlan(): void {
+    const plan = planFromBreaks(this.tracks, this.discBreaks)
     this.discOf = plan.discOf
     this.discCount = plan.count
   }
