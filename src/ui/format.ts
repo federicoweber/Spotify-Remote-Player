@@ -20,8 +20,8 @@ export function totalMinutesLabel(tracks: { duration_ms: number }[]): string {
 }
 
 /** Pick a cover image roughly matching the desired edge size (px). */
-export function albumImage(images: Image[], preferred = 300): string {
-  if (!images.length) return ''
+export function albumImage(images: Image[] | null | undefined, preferred = 300): string {
+  if (!images || images.length === 0) return ''
   const sorted = [...images].sort(
     (a, b) => (a.width ?? 0) - (b.width ?? 0),
   )

@@ -332,7 +332,7 @@ function updateLibrary(): void {
       grid.append(playlistGrantPrompt())
     } else {
       const filtered = playlists.filter((p) =>
-        matches(p.name, p.owner.display_name ?? ''),
+        matches(p.name, p.owner?.display_name),
       )
       if (!filtered.length) return void grid.append(emptyNote())
       for (const p of filtered) grid.append(playlistCard(p))
@@ -341,9 +341,9 @@ function updateLibrary(): void {
   renderGrid()
 }
 
-function matches(...fields: string[]): boolean {
+function matches(...fields: (string | null | undefined)[]): boolean {
   if (!filterText) return true
-  return fields.some((f) => f.toLowerCase().includes(filterText))
+  return fields.some((f) => (f ?? '').toLowerCase().includes(filterText))
 }
 
 function emptyNote(): HTMLElement {
@@ -398,8 +398,8 @@ function albumCard(saved: SavedAlbum): HTMLElement {
 function playlistCard(p: SimplifiedPlaylist): HTMLElement {
   return mediaCard(
     albumImage(p.images, 300),
-    p.name,
-    `${p.owner.display_name ?? 'Playlist'} · ${p.tracks.total} tracks`,
+    p.name ?? 'Untitled',
+    `${p.owner?.display_name ?? 'Playlist'} · ${p.tracks?.total ?? 0} tracks`,
     () => void openPlaylist(p),
   )
 }
