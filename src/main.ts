@@ -89,7 +89,23 @@ async function bootstrap(): Promise<void> {
   updateHeader()
   updateControls()
 
+  // Restore the tab from the URL so a reload on /playlists stays there.
+  libraryMode = modeFromPath()
+
   await Promise.all([loadDevices(), loadAlbums()])
+  if (libraryMode === 'playlists' && !playlistsLoaded && !playlistScopeMissing) {
+    await loadPlaylists()
+  }
+}
+
+function modeFromPath(): 'albums' | 'playlists' {
+  return location.pathname.startsWith('/playlist') ? 'playlists' : 'albums'
+}
+
+/** Keep the URL in sync with the active tab (replaceState → reload-friendly). */
+function syncUrl(mode: 'albums' | 'playlists'): void {
+  const path = mode === 'playlists' ? '/playlists' : '/'
+  if (location.pathname !== path) history.replaceState(null, '', path)
 }
 
 // ===========================================================================
@@ -330,6 +346,8 @@ function updateLibrary(): void {
       for (const saved of filtered) grid.append(albumCard(saved))
     } else if (playlistScopeMissing) {
       grid.append(playlistGrantPrompt())
+    } else if (!playlistsLoaded) {
+      grid.append(el('p', { class: 'muted', text: 'Loading playlists…' }))
     } else {
       const filtered = playlists.filter((p) =>
         matches(p.name, p.owner?.display_name),
@@ -376,6 +394,7 @@ function libraryTab(mode: 'albums' | 'playlists', label: string): HTMLElement {
       if (libraryMode === mode) return
       libraryMode = mode
       filterText = ''
+      syncUrl(mode)
       if (mode === 'playlists' && !playlistsLoaded && !playlistScopeMissing) {
         await loadPlaylists()
       } else {
@@ -399,7 +418,7 @@ function playlistCard(p: SimplifiedPlaylist): HTMLElement {
   return mediaCard(
     albumImage(p.images, 300),
     p.name ?? 'Untitled',
-    `${p.owner?.display_name ?? 'Playlist'} · ${p.tracks?.total ?? 0} tracks`,
+    `${p.owner?.display_name ?? 'Playlist'} · ${api.playlistTotal(p)} tracks`,
     () => void openPlaylist(p),
   )
 }
@@ -466,8 +485,8 @@ async function openPlaylist(p: SimplifiedPlaylist): Promise<void> {
   detail = {
     source: { kind: 'playlist', id: p.id, name: p.name, images: p.images },
     tracks: [],
-    totalCount: p.tracks.total,
-    subtitle: `by ${p.owner.display_name ?? p.owner.id}`,
+    totalCount: api.playlistTotal(p),
+    subtitle: `by ${p.owner?.display_name ?? p.owner?.id ?? 'unknown'}`,
     loading: true,
     breaks: null,
   }
@@ -476,6 +495,7 @@ async function openPlaylist(p: SimplifiedPlaylist): Promise<void> {
     const tracks = await api.getPlaylistTracks(p.id)
     if (detail?.source.id === p.id) {
       detail.tracks = tracks
+      detail.totalCount = tracks.length
       detail.loading = false
       renderDetail()
     }

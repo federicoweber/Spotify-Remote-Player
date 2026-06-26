@@ -168,21 +168,29 @@ export async function getAllPlaylists(
   return all
 }
 
+/** Number of tracks in a playlist, across both API shapes. */
+export function playlistTotal(p: SimplifiedPlaylist): number {
+  return p.items?.total ?? p.tracks?.total ?? 0
+}
+
 /**
  * Returns every playable track of a playlist, in order. Skips removed entries,
  * local files, and podcast episodes (only `spotify:track:` URIs are kept).
+ *
+ * Uses the `/items` endpoint: the older `/tracks` endpoint now returns 403 for
+ * newer apps. Each entry's track is under `item` (newer) or `track` (older).
  */
 export async function getPlaylistTracks(playlistId: string): Promise<Track[]> {
   const tracks: Track[] = []
   const collect = (items: PlaylistTrackItem[]): void => {
-    for (const item of items) {
-      const t = item?.track
+    for (const entry of items) {
+      const t = entry?.item ?? entry?.track
       if (t && t.uri && t.uri.startsWith('spotify:track:')) tracks.push(t)
     }
   }
 
   let page = await request<Paging<PlaylistTrackItem>>(
-    `/playlists/${playlistId}/tracks`,
+    `/playlists/${playlistId}/items`,
     { query: { limit: 100, offset: 0, additional_types: 'track' } },
   )
   collect(page.items)

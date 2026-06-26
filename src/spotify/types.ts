@@ -64,12 +64,19 @@ export interface SimplifiedPlaylist {
   description: string | null
   images: Image[]
   owner: { id: string; display_name: string | null }
-  tracks: { href: string; total: number }
+  // Newer Spotify API exposes the track-collection ref under `items`; older
+  // responses use `tracks`. Both are { href, total }.
+  tracks?: { href: string; total: number }
+  items?: { href: string; total: number }
 }
 
-/** An entry in a playlist; `track` is null for removed items and may be an episode. */
+/**
+ * An entry in a playlist. Newer API nests the track/episode under `item`;
+ * older responses use `track`. Either is null for removed entries.
+ */
 export interface PlaylistTrackItem {
-  track: Track | null
+  item?: Track | null
+  track?: Track | null
   is_local?: boolean
 }
 
