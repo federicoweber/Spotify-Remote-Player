@@ -46,6 +46,8 @@ const END_GRACE_MS = 2500
 const MAX_START_WAIT = 8
 // How many "wrong track" polls to tolerate before declaring external takeover.
 const MAX_MISMATCH = 4
+// Press ⏮ past this point in a track to restart it; before it, go to the previous track.
+const PREV_RESTART_MS = 3000
 
 type Listener = (snap: SequencerSnapshot) => void
 
@@ -199,6 +201,14 @@ export class AlbumSequencer {
 
   previous(): void {
     this.stopAllTimers()
+    // If we're partway into the current track, restart it instead of stepping back.
+    const midTrack =
+      this.state === 'playing' ||
+      (this.state === 'paused' && this.pausedFrom === 'playing')
+    if (midTrack && this.progressMs > PREV_RESTART_MS) {
+      void this.playCurrent() // replay current track from the beginning
+      return
+    }
     this.index = Math.max(0, this.index - 1)
     void this.playCurrent()
   }
