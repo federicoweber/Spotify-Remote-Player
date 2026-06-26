@@ -317,7 +317,7 @@ function updateLibrary(): void {
     libraryTab('albums', `Albums${albums.length ? ` (${albums.length})` : ''}`),
     libraryTab(
       'playlists',
-      `Playlists${playlistsLoaded ? ` (${playlists.length})` : ''}`,
+      `Playlists${playlistsLoaded ? ` (${ownedPlaylists().length})` : ''}`,
     ),
   ])
 
@@ -334,14 +334,11 @@ function updateLibrary(): void {
 
   libraryEl.append(el('div', { class: 'albums-header' }, [tabs, search]))
 
-  if (
-    libraryMode === 'playlists' &&
-    playlistsLoaded &&
-    playlists.some(isForeignPlaylist)
-  ) {
+  const hiddenCount = playlists.length - ownedPlaylists().length
+  if (libraryMode === 'playlists' && playlistsLoaded && hiddenCount > 0) {
     libraryEl.append(
       el('p', { class: 'library-note muted small', text:
-        '🔒 Playlists owned by others can’t have their tracks read by this app (a Spotify restriction). Only your own playlists open.' }),
+        `Showing ${ownedPlaylists().length} playlist(s) you own. ${hiddenCount} followed playlist(s) are hidden — Spotify won’t let this app read their tracks.` }),
     )
   }
 
@@ -361,7 +358,7 @@ function updateLibrary(): void {
     } else if (!playlistsLoaded) {
       grid.append(el('p', { class: 'muted', text: 'Loading playlists…' }))
     } else {
-      const filtered = playlists.filter((p) =>
+      const filtered = ownedPlaylists().filter((p) =>
         matches(p.name, p.owner?.display_name),
       )
       if (!filtered.length) return void grid.append(emptyNote())
@@ -431,13 +428,17 @@ function isForeignPlaylist(p: SimplifiedPlaylist): boolean {
   return Boolean(p.owner?.id && user?.id && p.owner.id !== user.id)
 }
 
+/** Only playlists the user owns — the rest can't have their tracks read. */
+function ownedPlaylists(): SimplifiedPlaylist[] {
+  return playlists.filter((p) => !isForeignPlaylist(p))
+}
+
 function playlistCard(p: SimplifiedPlaylist): HTMLElement {
   return mediaCard(
     albumImage(p.images, 300),
     p.name ?? 'Untitled',
     `${p.owner?.display_name ?? 'Playlist'} · ${api.playlistTotal(p)} tracks`,
     () => void openPlaylist(p),
-    isForeignPlaylist(p),
   )
 }
 
