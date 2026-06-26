@@ -96,7 +96,7 @@ async function sha256(plain: string): Promise<ArrayBuffer> {
 // Login / callback / logout
 // ---------------------------------------------------------------------------
 
-export async function login(): Promise<void> {
+export async function login(forceConsent = false): Promise<void> {
   const clientId = getClientId()
   if (!clientId) throw new Error('Missing Spotify Client ID')
 
@@ -116,6 +116,9 @@ export async function login(): Promise<void> {
     state,
     scope: SCOPES,
   })
+  // Force the consent screen when adding scopes to an already-authorized app,
+  // so newly-required scopes are actually granted.
+  if (forceConsent) params.set('show_dialog', 'true')
 
   window.location.assign(`${AUTH_ENDPOINT}?${params.toString()}`)
 }
@@ -221,7 +224,8 @@ function storeTokens(data: {
     // Spotify only returns a new refresh token sometimes; keep the old one if absent.
     refresh_token: data.refresh_token || prev?.refresh_token || '',
     expires_at: Date.now() + data.expires_in * 1000,
-    scope: data.scope,
+    // A refresh response may omit `scope`; don't lose the granted scopes.
+    scope: data.scope ?? prev?.scope,
   }
   localStorage.setItem(STORAGE.tokens, JSON.stringify(tokens))
 }

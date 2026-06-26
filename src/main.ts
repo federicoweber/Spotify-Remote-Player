@@ -35,11 +35,6 @@ let playlists: SimplifiedPlaylist[] = []
 let playlistsLoaded = false
 let playlistScopeMissing = false
 let libraryMode: 'albums' | 'playlists' = 'albums'
-
-const PLAYLIST_SCOPE = 'playlist-read-private'
-function canReadPlaylists(): boolean {
-  return auth.hasScope(PLAYLIST_SCOPE) && !playlistScopeMissing
-}
 let devices: Device[] = []
 let selectedDeviceId: string | null = null
 let intervalSec = 5
@@ -333,7 +328,7 @@ function updateLibrary(): void {
       )
       if (!filtered.length) return void grid.append(emptyNote())
       for (const saved of filtered) grid.append(albumCard(saved))
-    } else if (!canReadPlaylists()) {
+    } else if (playlistScopeMissing) {
       grid.append(playlistGrantPrompt())
     } else {
       const filtered = playlists.filter((p) =>
@@ -364,7 +359,7 @@ function playlistGrantPrompt(): HTMLElement {
       text: 'Grant playlist access',
       onclick: async () => {
         try {
-          await auth.login()
+          await auth.login(true) // force the consent screen to grant new scopes
         } catch (e) {
           alert(messageOf(e))
         }
@@ -381,7 +376,7 @@ function libraryTab(mode: 'albums' | 'playlists', label: string): HTMLElement {
       if (libraryMode === mode) return
       libraryMode = mode
       filterText = ''
-      if (mode === 'playlists' && !playlistsLoaded && canReadPlaylists()) {
+      if (mode === 'playlists' && !playlistsLoaded && !playlistScopeMissing) {
         await loadPlaylists()
       } else {
         updateLibrary()
