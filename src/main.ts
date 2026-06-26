@@ -333,6 +333,18 @@ function updateLibrary(): void {
   })
 
   libraryEl.append(el('div', { class: 'albums-header' }, [tabs, search]))
+
+  if (
+    libraryMode === 'playlists' &&
+    playlistsLoaded &&
+    playlists.some(isForeignPlaylist)
+  ) {
+    libraryEl.append(
+      el('p', { class: 'library-note muted small', text:
+        '🔒 Playlists owned by others can’t have their tracks read by this app (a Spotify restriction). Only your own playlists open.' }),
+    )
+  }
+
   const grid = el('div', { class: 'grid' })
   libraryEl.append(grid)
 
@@ -414,12 +426,18 @@ function albumCard(saved: SavedAlbum): HTMLElement {
   )
 }
 
+/** Playlists owned by someone else: Spotify blocks reading their tracks here. */
+function isForeignPlaylist(p: SimplifiedPlaylist): boolean {
+  return Boolean(p.owner?.id && user?.id && p.owner.id !== user.id)
+}
+
 function playlistCard(p: SimplifiedPlaylist): HTMLElement {
   return mediaCard(
     albumImage(p.images, 300),
     p.name ?? 'Untitled',
     `${p.owner?.display_name ?? 'Playlist'} · ${api.playlistTotal(p)} tracks`,
     () => void openPlaylist(p),
+    isForeignPlaylist(p),
   )
 }
 
@@ -428,8 +446,16 @@ function mediaCard(
   title: string,
   sub: string,
   onClick: () => void,
+  locked = false,
 ): HTMLElement {
-  return el('button', { class: 'card', onclick: onClick }, [
+  return el('button', { class: `card${locked ? ' card-locked' : ''}`, onclick: onClick }, [
+    locked
+      ? el('span', {
+          class: 'card-badge',
+          text: '🔒',
+          title: "Owned by someone else — Spotify won't let this app read its tracks",
+        })
+      : null,
     cover
       ? el('img', { class: 'card-cover', src: cover, alt: '', loading: 'lazy' })
       : el('div', { class: 'card-cover card-cover-empty' }),
@@ -502,7 +528,10 @@ async function openPlaylist(p: SimplifiedPlaylist): Promise<void> {
   } catch (e) {
     if (detail?.source.id === p.id) {
       detail.loading = false
-      detail.error = messageOf(e)
+      detail.error =
+        e instanceof SpotifyApiError && e.status === 403
+          ? `Spotify won't let this app read the tracks of playlists you don't own. “${p.name}” is owned by ${p.owner?.display_name ?? p.owner?.id ?? 'someone else'}, so it can't be loaded here — only your own playlists work.`
+          : messageOf(e)
       renderDetail()
     }
   }

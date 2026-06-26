@@ -315,6 +315,7 @@ a {
   gap: 16px;
 }
 .card {
+  position: relative;
   text-align: left;
   background: var(--bg-elev);
   border: 1px solid var(--line);
@@ -326,7 +327,28 @@ a {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+.card-locked {
+  opacity: 0.55;
+}
+.card-locked:hover {
+  opacity: 1;
+}
+.card-badge {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 1;
+  background: rgba(0, 0, 0, 0.72);
+  border-radius: 7px;
+  padding: 2px 7px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.library-note {
+  margin: -4px 0 16px;
 }
 .card:hover {
   background: var(--bg-elev-2);
