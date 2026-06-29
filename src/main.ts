@@ -114,6 +114,14 @@ function syncUrl(mode: 'albums' | 'playlists'): void {
 
 function renderLogin(error?: string): void {
   clear(root)
+
+  // A Client ID baked in at build time (VITE_SPOTIFY_CLIENT_ID) means visitors
+  // don't bring their own — hide the field and the developer-setup copy. Forks
+  // built without it still get the manual "paste your Client ID" flow.
+  const hasPresetClientId = Boolean(
+    (import.meta.env.VITE_SPOTIFY_CLIENT_ID ?? '').trim(),
+  )
+
   const clientIdInput = el('input', {
     class: 'field',
     type: 'text',
@@ -127,10 +135,12 @@ function renderLogin(error?: string): void {
     class: 'btn btn-primary btn-lg',
     text: 'Connect Spotify',
     onclick: async () => {
-      auth.setClientId(clientIdInput.value)
-      if (!clientIdInput.value.trim()) {
-        showLoginError('Enter your Spotify app Client ID first.')
-        return
+      if (!hasPresetClientId) {
+        auth.setClientId(clientIdInput.value)
+        if (!clientIdInput.value.trim()) {
+          showLoginError('Enter your Spotify app Client ID first.')
+          return
+        }
       }
       try {
         await auth.login()
@@ -157,16 +167,20 @@ function renderLogin(error?: string): void {
     ]),
     el('p', {
       class: 'muted',
-      text: 'Browse your saved albums and playlists, then dub them to a Connect device with a custom gap between tracks and MiniDisc-length disc splitting.',
+      text: 'Browse your saved Spotify albums and playlists, then dub them to a Connect device with a custom gap between tracks and MiniDisc-length disc splitting.',
     }),
     errorBox,
-    el('label', { class: 'field-label', text: 'Client ID' }),
-    clientIdInput,
-    el('p', { class: 'muted small', text: `Redirect URI: ${auth.getRedirectUri()}` }),
+    !hasPresetClientId && el('label', { class: 'field-label', text: 'Client ID' }),
+    !hasPresetClientId && clientIdInput,
+    !hasPresetClientId &&
+      el('p', { class: 'muted small', text: `Redirect URI: ${auth.getRedirectUri()}` }),
     connectBtn,
     el('div', { class: 'login-help' }, [
-      el('p', { class: 'muted small', html:
-        'Create an app at <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">developer.spotify.com/dashboard</a>, add the redirect URI above to it, then paste the Client ID here.' }),
+      hasPresetClientId
+        ? el('p', { class: 'muted small', text:
+            'Connect your Spotify account to load your library. Access is limited to a small set of approved accounts.' })
+        : el('p', { class: 'muted small', html:
+            'Create an app at <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">developer.spotify.com/dashboard</a>, add the redirect URI above to it, then paste the Client ID here.' }),
       el('p', { class: 'muted small', text:
         'Playback control requires Spotify Premium. For lossless audio, set your Spotify desktop app to "Lossless" and pick it as the device.' }),
     ]),
